@@ -1,0 +1,7 @@
+sudo chmod +x /usr/local/bin/tilix-session-logger.sh
+mkdir -p ~/tilix-logs
+sudo logrotate -f /etc/logrotate.d/tilix-logs
+
+zgrep `zgrep "ERROR" *.gz`
+zcat	`zcat file.log.gz |	less -R`
+zless	`zless file.log.gz`
