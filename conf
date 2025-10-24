@@ -1,0 +1,29 @@
+# ===================================================
+# Log rotation for Tilix session logs
+# Rotates weekly, compresses using gzip,
+# and stores old logs in ~/tilix-logs/archive/YYYY-MM/.
+# Logs are never deleted automatically.
+# ===================================================
+
+/home/*/tilix-logs/*.log {
+    weekly
+    rotate 9999                   # Keep all rotated logs
+    compress                      # Use gzip compression
+    delaycompress                 # Keep the most recent uncompressed
+    missingok
+    notifempty
+    create 0640 root root         # Adjust user/group if needed
+    olddir archive
+    sharedscripts
+
+    postrotate
+        # Create monthly subfolders in 'archive'
+        for d in /home/*/tilix-logs; do
+            MONTH_DIR="$d/archive/$(date +%Y-%m)"
+            mkdir -p "$MONTH_DIR"
+            # Move recently rotated logs (from the last 7 days) to the monthly folder
+            find "$d/archive" -maxdepth 1 -type f -name "*.gz" -newermt "$(date -d '7 days ago')" -exec mv {} "$MONTH_DIR" \;
+            find "$d/archive" -maxdepth 1 -type f -name "*.log.[0-9]*" -newermt "$(date -d '7 days ago')" -exec mv {} "$MONTH_DIR" \;
+        done
+    endscript
+}
