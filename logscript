@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# ==============================================
+# Tilix Session Logger
+# Automatically records full terminal sessions
+# into ~/tilix-logs/. Uses 'script' for accurate
+# output capturing (including colors and ANSI).
+# ==============================================
+
+LOGDIR="$HOME/tilix-logs"
+mkdir -p "$LOGDIR"
+
+# Metadata for log naming
+HOST=$(hostname -s)
+USER=$(whoami)
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+TTYNAME=$(tty 2>/dev/null | sed 's#/dev/##' || echo "no-tty")
+
+LOGFILE="$LOGDIR/${HOST}_${USER}_${TIMESTAMP}_${TTYNAME}.log"
+
+# Prevent recursion if this wrapper is already active
+if [ -z "$TILIX_LOGGER_ACTIVE" ]; then
+  export TILIX_LOGGER_ACTIVE=1
+  echo "[Tilix logger] Session recording started: $LOGFILE"
+  # Launch user’s default shell inside 'script' for continuous logging
+  exec script -q -f -c "$SHELL --login" "$LOGFILE"
+else
+  exec "$SHELL" --login
+fi
