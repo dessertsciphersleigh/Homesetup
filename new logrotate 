@@ -1,0 +1,25 @@
+# -------------------------------------------------------------
+# Logrotate configuration for Tilix Session Logger
+# -------------------------------------------------------------
+#  - Keeps logs for 30 days
+#  - Compresses with gzip
+#  - Moves compressed logs into archive subfolders by month
+#  - Never deletes logs automatically
+# -------------------------------------------------------------
+
+~/.local/share/tilix_logs/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644
+    postrotate
+        MONTH=$(date +%Y-%m)
+        ARCHIVE_DIR="$HOME/.local/share/tilix_logs/archive/$MONTH"
+        mkdir -p "$ARCHIVE_DIR"
+        # Move only the compressed logs from the last rotation cycle
+        find "$HOME/.local/share/tilix_logs" -maxdepth 1 -type f -name "*.gz" -mtime -1 -exec mv {} "$ARCHIVE_DIR"/ \;
+    endscript
+}
