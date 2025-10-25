@@ -1,0 +1,49 @@
+# Add this to ~/.bashrc or source in your shell session
+
+# Colors
+RESET='\[\e[0m\]'
+BLACK='\[\e[0;30m\]'
+RED='\[\e[0;31m\]'
+GREEN='\[\e[0;32m\]'
+YELLOW='\[\e[0;33m\]'
+BLUE='\[\e[0;34m\]'
+MAGENTA='\[\e[0;35m\]'
+CYAN='\[\e[0;36m\]'
+WHITE='\[\e[0;37m\]'
+
+# Powerline separator characters
+SEP_LEFT_BOLD=''  # requires a Powerline font
+SEP_LEFT_THIN=''
+
+# Timestamp function
+function prompt_timestamp {
+    echo -n "$(date '+%F %H:%M:%S')"
+}
+
+# Build PS1
+function set_powerline_prompt {
+    local TIMESTAMP_COLOR="$CYAN"
+    local USER_COLOR="$GREEN"
+    local DIR_COLOR="$BLUE"
+    local GIT_COLOR="$MAGENTA"
+    local SEP_COLOR="$RESET"
+
+    # Optional: Git branch display
+    local GIT_BRANCH=""
+    if command -v git &>/dev/null; then
+        local branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+        if [[ -n $branch ]]; then
+            GIT_BRANCH=" $GIT_COLOR $branch$RESET"
+        fi
+    fi
+
+    PS1=""
+    PS1+="${TIMESTAMP_COLOR}$(prompt_timestamp) ${SEP_COLOR}${SEP_LEFT_BOLD}"
+    PS1+="${USER_COLOR}\u@\h ${SEP_COLOR}${SEP_LEFT_BOLD}"
+    PS1+="${DIR_COLOR}\w ${SEP_COLOR}${SEP_LEFT_BOLD}"
+    PS1+="$GIT_BRANCH"
+    PS1+="$RESET\n$ "  # new line + standard prompt
+}
+
+# Enable
+PROMPT_COMMAND=set_powerline_prompt
