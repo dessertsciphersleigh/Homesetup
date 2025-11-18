@@ -1,0 +1,29 @@
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$InputFile,
+    [Parameter(Mandatory=$true)]
+    [string]$OutputFile,
+    [Parameter(Mandatory=$true)]
+    [string]$Password
+)
+
+# Derive key + IV from password using PBKDF2
+$Salt = New-Object byte[] 16
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Salt)
+
+$Derive = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($Password, $Salt, 100000)
+$Key = $Derive.GetBytes(32)  # AES-256 key
+$IV  = $Derive.GetBytes(16)  # AES IV
+
+# AES encrypt
+$AES = [System.Security.Cryptography.Aes]::Create()
+$AES.Key = $Key
+$AES.IV  = $IV
+
+$Encryptor = $AES.CreateEncryptor()
+$InputBytes = [IO.File]::ReadAllBytes($InputFile)
+
+$Encrypted = $Encryptor.TransformFinalBlock($InputBytes, 0, $InputBytes.Length)
+
+# Output format: SALT + IV + CIPHERTEXT
+[IO.File]::WriteAllBytes($OutputFile, $Salt + $IV + $Encrypted)
