@@ -1,0 +1,101 @@
+<#
+.SYNOPSIS
+Simple RSA file encrypt/decrypt wrapper.
+The private key is protected with a password using AES.
+No certificate store is used.
+#>
+
+function New-RsaKeyPair {
+    param(
+        [string]$PrivateKeyFile,
+        [string]$PublicKeyFile,
+        [string]$Password
+    )
+
+    # Create RSA key
+    $rsa = [System.Security.Cryptography.RSA]::Create(4096)
+
+    # Export public key in standard PKCS#1 PEM
+    $pub = $rsa.ExportRSAPublicKeyPem()
+    Set-Content -Path $PublicKeyFile -Value $pub -Encoding UTF8
+
+    # Export private key (PEM)
+    $privatePem = $rsa.ExportRSAPrivateKeyPem()
+
+    # Protect the private PEM using AES + password
+    $aes = [System.Security.Cryptography.Aes]::Create()
+    $aes.GenerateIV()
+
+    # Derive AES key from password
+    $derive = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($Password, 16, 100000)
+    $aes.Key = $derive.GetBytes(32)
+
+    $encryptor = $aes.CreateEncryptor()
+    $privateBytes = [System.Text.Encoding]::UTF8.GetBytes($privatePem)
+    $cipher = $encryptor.TransformFinalBlock($privateBytes, 0, $privateBytes.Length)
+
+    # Save IV + ciphertext
+    $out = [byte[]]::Concat($aes.IV, $cipher)
+    [System.IO.File]::WriteAllBytes($PrivateKeyFile, $out)
+}
+
+function Load-PrivateKey {
+    param(
+        [string]$PrivateKeyFile,
+        [string]$Password
+    )
+
+    $raw = [System.IO.File]::ReadAllBytes($PrivateKeyFile)
+
+    $iv = $raw[0..15]
+    $cipher = $raw[16..($raw.Length-1)]
+
+    $aes = [System.Security.Cryptography.Aes]::Create()
+    $aes.IV = $iv
+
+    # Derive AES key
+    $derive = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($Password, 16, 100000)
+    $aes.Key = $derive.GetBytes(32)
+
+    $decryptor = $aes.CreateDecryptor()
+    $plain = $decryptor.TransformFinalBlock($cipher, 0, $cipher.Length)
+
+    $privatePem = [System.Text.Encoding]::UTF8.GetString($plain)
+
+    # Rebuild RSA object
+    $rsa = [System.Security.Cryptography.RSA]::Create()
+    $rsa.ImportFromPem($privatePem)
+    return $rsa
+}
+
+function Encrypt-FileRsa {
+    param(
+        [string]$InputFile,
+        [string]$OutputFile,
+        [string]$PublicKeyFile
+    )
+
+    $rsa = [System.Security.Cryptography.RSA]::Create()
+    $rsa.ImportFromPem((Get-Content $PublicKeyFile -Raw))
+
+    $data = [System.IO.File]::ReadAllBytes($InputFile)
+    $enc = $rsa.Encrypt($data, [Security.Cryptography.RSAEncryptionPadding]::OaepSHA256)
+
+    [System.IO.File]::WriteAllBytes($OutputFile, $enc)
+}
+
+function Decrypt-FileRsa {
+    param(
+        [string]$InputFile,
+        [string]$OutputFile,
+        [string]$PrivateKeyFile,
+        [string]$Password
+    )
+
+    $rsa = Load-PrivateKey -PrivateKeyFile $PrivateKeyFile -Password $Password
+
+    $cipher = [System.IO.File]::ReadAllBytes($InputFile)
+    $plain = $rsa.Decrypt($cipher, [Security.Cryptography.RSAEncryptionPadding]::OaepSHA256)
+
+    [System.IO.File]::WriteAllBytes($OutputFile, $plain)
+}
