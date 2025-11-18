@@ -1,0 +1,196 @@
+<#
+SYNOPSIS
+  crypto.ps1 - Simple RSA/AES file encryption without Windows certificate store.
+
+USAGE
+  .\crypto.ps1 genkey  [-Public public.key] [-Private private.key.enc] [-KeySize 4096]
+  .\crypto.ps1 encrypt -File input.txt -Public public.key
+  .\crypto.ps1 decrypt -File input.txt.enc -Private private.key.enc
+
+NOTES
+  - Private key is stored as: [16 salt][16 iv][encryptedPrivateKey]
+  - Encrypted file is stored as: [4-byte LE length][encryptedAESKey][16 iv][ciphertext]
+#>
+
+Param(
+    [Parameter(Position=0, Mandatory=$true)]
+    [ValidateSet("genkey","encrypt","decrypt")]
+    [string]$Command,
+
+    # genkey parameters
+    [string]$Public = "public.key",
+    [string]$Private = "private.key.enc",
+    [int]$KeySize = 4096,
+
+    # encrypt/decrypt
+    [string]$File
+)
+
+function Read-SecurePasswordBytes {
+    param()
+    $ss = Read-Host "Enter password" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($ss)
+    try {
+        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        return [System.Text.Encoding]::UTF8.GetBytes($plain)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) | Out-Null
+    }
+}
+
+function Write-AllBytes {
+    param([string]$Path, [byte[]]$Data)
+    [System.IO.File]::WriteAllBytes($Path, $Data)
+}
+
+function Read-AllBytes {
+    param([string]$Path)
+    return [System.IO.File]::ReadAllBytes($Path)
+}
+
+switch ($Command) {
+
+    "genkey" {
+        Write-Host "Generating RSA keypair ($KeySize bits)..." -ForegroundColor Cyan
+
+        $rsa = [System.Security.Cryptography.RSA]::Create($KeySize)
+
+        $publicBytes  = $rsa.ExportRSAPublicKey()
+        $privateBytes = $rsa.ExportRSAPrivateKey()
+
+        $passwordBytes = Read-SecurePasswordBytes
+
+        $salt = New-Object byte[] 16
+        [System.Security.Cryptography.RandomNumberGenerator]::Fill($salt)
+
+        $iterations = 200000
+        $pbkdf2 = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($passwordBytes, $salt, $iterations)
+        $aesKey = $pbkdf2.GetBytes(32)
+
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $aes.KeySize = 256
+        $aes.Key = $aesKey
+        $aes.GenerateIV()
+        $encryptor = $aes.CreateEncryptor()
+        $encPriv = $encryptor.TransformFinalBlock($privateBytes, 0, $privateBytes.Length)
+
+        $outPriv = $salt + $aes.IV + $encPriv
+        Write-AllBytes -Path $Private -Data $outPriv
+        Write-AllBytes -Path $Public -Data $publicBytes
+
+        Write-Host "Keys generated:"
+        Write-Host "  Public key:   $Public"
+        Write-Host "  Private key:  $Private (encrypted with password, PBKDF2 iterations = $iterations)"
+
+        [Array]::Clear($passwordBytes,0,$passwordBytes.Length)
+        [Array]::Clear($aesKey,0,$aesKey.Length)
+        break
+    }
+
+    "encrypt" {
+        if (-not $File) { Write-Host "Missing parameter: -File" -ForegroundColor Red; break }
+        if (-not (Test-Path $Public)) { Write-Host "Public key not found: $Public" -ForegroundColor Red; break }
+
+        Write-Host "Encrypting $File using $Public ..." -ForegroundColor Cyan
+
+        $publicBytes = Read-AllBytes -Path $Public
+
+        $rsa = [System.Security.Cryptography.RSA]::Create()
+        $null = $rsa.ImportRSAPublicKey($publicBytes, [ref]0)
+
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $aes.KeySize = 256
+        $aes.GenerateKey()
+        $aes.GenerateIV()
+
+        $plaintext = Read-AllBytes -Path $File
+        $cipher = $aes.CreateEncryptor().TransformFinalBlock($plaintext,0,$plaintext.Length)
+
+        $encAesKey = $rsa.Encrypt($aes.Key, [System.Security.Cryptography.RSAEncryptionPadding]::OaepSHA256)
+
+        $lenBytes = [System.BitConverter]::GetBytes([int]$encAesKey.Length)
+        $out = $lenBytes + $encAesKey + $aes.IV + $cipher
+
+        $outPath = "$File.enc"
+        Write-AllBytes -Path $outPath -Data $out
+
+        Write-Host "Encrypted file written to: $outPath" -ForegroundColor Green
+        break
+    }
+
+    "decrypt" {
+        if (-not $File) { Write-Host "Missing parameter: -File" -ForegroundColor Red; break }
+        if (-not (Test-Path $Private)) { Write-Host "Private key not found: $Private" -ForegroundColor Red; break }
+
+        Write-Host "Decrypting $File using $Private ..." -ForegroundColor Cyan
+
+        $privPkg = Read-AllBytes -Path $Private
+        if ($privPkg.Length -lt 33) { Write-Host "Invalid private key format." -ForegroundColor Red; break }
+
+        $salt = $privPkg[0..15]
+        $ivPriv = $privPkg[16..31]
+        $encPriv = $privPkg[32..($privPkg.Length-1)]
+
+        $passwordBytes = Read-SecurePasswordBytes
+
+        $iterations = 200000
+        $pbkdf2 = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($passwordBytes, $salt, $iterations)
+        $aesKey = $pbkdf2.GetBytes(32)
+
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $aes.KeySize = 256
+        $aes.Key = $aesKey
+        $aes.IV = $ivPriv
+
+        try {
+            $privateBytes = $aes.CreateDecryptor().TransformFinalBlock($encPriv,0,$encPriv.Length)
+        } catch {
+            Write-Host "Error: incorrect password or corrupted private key." -ForegroundColor Red
+            break
+        }
+
+        $rsa = [System.Security.Cryptography.RSA]::Create()
+        $null = $rsa.ImportRSAPrivateKey($privateBytes, [ref]0)
+
+        $edata = Read-AllBytes -Path $File
+        if ($edata.Length -lt 4+16) { Write-Host "Invalid or corrupted encrypted file." -ForegroundColor Red; break }
+
+        $len = [System.BitConverter]::ToInt32($edata, 0)
+        $offset = 4
+        if ($edata.Length -lt ($offset + $len + 16)) { Write-Host "Encrypted file is truncated." -ForegroundColor Red; break }
+
+        $encAesKey = $edata[$offset..($offset+$len-1)]; $offset += $len
+        $fileIV = $edata[$offset..($offset+15)];        $offset += 16
+        $cipher = $edata[$offset..($edata.Length-1)]
+
+        try {
+            $fileAesKey = $rsa.Decrypt($encAesKey, [System.Security.Cryptography.RSAEncryptionPadding]::OaepSHA256)
+        } catch {
+            Write-Host "Error decrypting AES key (wrong private key?)." -ForegroundColor Red
+            break
+        }
+
+        $aes2 = [System.Security.Cryptography.Aes]::Create()
+        $aes2.KeySize = 256
+        $aes2.Key = $fileAesKey
+        $aes2.IV = $fileIV
+
+        try {
+            $plain = $aes2.CreateDecryptor().TransformFinalBlock($cipher,0,$cipher.Length)
+        } catch {
+            Write-Host "Error decrypting file contents." -ForegroundColor Red
+            break
+        }
+
+        $outPath = $File -replace "\.enc$",""
+        if ($outPath -eq $File) { $outPath = "$File.dec" }
+
+        Write-AllBytes -Path $outPath -Data $plain
+        Write-Host "Decrypted file written to: $outPath" -ForegroundColor Green
+
+        [Array]::Clear($passwordBytes,0,$passwordBytes.Length)
+        [Array]::Clear($aesKey,0,$aesKey.Length)
+        [Array]::Clear($fileAesKey,0,$fileAesKey.Length)
+        break
+    }
+}
