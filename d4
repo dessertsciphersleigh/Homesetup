@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+INPUT_FILE="lista.txt"
+OUTPUT_FILE="resultado.json"
+
+echo "[" > "$OUTPUT_FILE"
+first=1
+
+while IFS=' ' read -r url string17; do
+    # Ignorar líneas vacías
+    [[ -z "$url" ]] && continue
+
+    # Ejecutar curl
+    response=$(curl -s -w "\n%{http_code}" "$url" -H "X-Custom: $string17")
+    rc=$?
+
+    # Separar cuerpo y status HTTP (última línea)
+    body=$(echo "$response" | sed '$d')
+    http_code=$(echo "$response" | tail -n1)
+
+    # Comas JSON
+    if [[ $first -eq 0 ]]; then
+        echo "," >> "$OUTPUT_FILE"
+    fi
+    first=0
+
+    # Escapar body para JSON
+    escaped_body=$(printf '%s' "$body" | jq -R -s .)
+
+    # Escribir bloque JSON
+    cat >> "$OUTPUT_FILE" <<EOF
+{
+  "url": "$url",
+  "string17": "$string17",
+  "rc": $rc,
+  "http_code": $http_code,
+  "response": $escaped_body
+}
+EOF
+
+done < "$INPUT_FILE"
+
+echo "]" >> "$OUTPUT_FILE"
